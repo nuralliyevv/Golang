@@ -37,21 +37,22 @@ func initDB() {
 }
 
 func createTables() {
-	// Create habits table
+	// Create habits table with composite primary key
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS habits (
-			id SERIAL PRIMARY KEY,
+			id BIGINT NOT NULL,
 			user_id BIGINT NOT NULL,
 			name VARCHAR(255) NOT NULL,
 			description TEXT,
-			created_at TIMESTAMP NOT NULL
+			created_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (user_id, id)
 		)
 	`)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Create track_records table
+	// Create track_records table with composite foreign key
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS track_records (
 			id SERIAL PRIMARY KEY,
@@ -59,7 +60,7 @@ func createTables() {
 			user_id BIGINT NOT NULL,
 			completed BOOLEAN NOT NULL,
 			date TIMESTAMP NOT NULL,
-			FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
+			FOREIGN KEY (user_id, habit_id) REFERENCES habits(user_id, id) ON DELETE CASCADE
 		)
 	`)
 	if err != nil {
@@ -68,16 +69,39 @@ func createTables() {
 }
 
 func saveHabit(habit *Habit) error {
+	// Get the next habit ID for this user
+	nextID, err := getNextHabitID(habit.UserID)
+	if err != nil {
+		return err
+	}
+
 	query := `
-		INSERT INTO habits (user_id, name, description, created_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO habits (id, user_id, name, description, created_at)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id
 	`
-	err := db.QueryRow(query, habit.UserID, habit.Name, habit.Description, habit.CreatedAt).Scan(&habit.ID)
+	err = db.QueryRow(query, nextID, habit.UserID, habit.Name, habit.Description, habit.CreatedAt).Scan(&habit.ID)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func getNextHabitID(userID int64) (int64, error) {
+	var maxID sql.NullInt64
+	query := `
+		SELECT MAX(id)
+		FROM habits
+		WHERE user_id = $1
+	`
+	err := db.QueryRow(query, userID).Scan(&maxID)
+	if err != nil {
+		return 0, err
+	}
+	if !maxID.Valid {
+		return 1, nil
+	}
+	return maxID.Int64 + 1, nil
 }
 
 func saveTrackRecord(record *TrackRecord) error {
@@ -143,21 +167,4 @@ func loadTrackRecords(userID int64) (map[int64][]*TrackRecord, error) {
 	}
 
 	return records, nil
-}
-
-func getNextHabitID(userID int64) (int64, error) {
-	var maxID sql.NullInt64
-	query := `
-		SELECT MAX(id)
-		FROM habits
-		WHERE user_id = $1
-	`
-	err := db.QueryRow(query, userID).Scan(&maxID)
-	if err != nil {
-		return 0, err
-	}
-	if !maxID.Valid {
-		return 1, nil
-	}
-	return maxID.Int64 + 1, nil
 } 
